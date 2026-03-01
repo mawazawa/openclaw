@@ -74,6 +74,15 @@ async function resumableUpload(params: {
         "Content-Length": String(chunk.byteLength),
         "Content-Range": `bytes ${offset}-${end - 1}/${totalSize}`,
       },
+      body: chunk,
+    });
+
+    const chunkRes = await fetchFn(session.uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Length": String(chunk.byteLength),
+        "Content-Range": `bytes ${offset}-${end - 1}/${totalSize}`,
+      },
       body: new Uint8Array(chunk),
     });
 
