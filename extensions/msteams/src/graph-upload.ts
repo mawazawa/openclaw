@@ -15,6 +15,105 @@ const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
 
+/** Files larger than 4 MB must use a resumable upload session. */
+export const SIMPLE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
+
+/** Upload chunks in 3.75 MiB slices (must be a multiple of 320 KiB). */
+export const UPLOAD_CHUNK_SIZE = 320 * 1024 * 12; // 3,840 KiB
+
+/**
+ * Upload a large file using a resumable upload session.
+ *
+ * 1. Creates an upload session at `createSessionUrl`.
+ * 2. PUTs the file in sequential chunks of `UPLOAD_CHUNK_SIZE`.
+ * 3. Returns the completed driveItem from the final chunk response.
+ *
+ * @see https://learn.microsoft.com/en-us/graph/api/driveitem-createuploadsession
+ */
+async function resumableUpload(params: {
+  createSessionUrl: string;
+  buffer: Buffer;
+  token: string;
+  fetchFn: typeof fetch;
+}): Promise<OneDriveUploadResult> {
+  const { createSessionUrl, buffer, token, fetchFn } = params;
+  const totalSize = buffer.byteLength;
+
+  // 1. Create the upload session
+  const sessionRes = await fetchFn(createSessionUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    // Passing an empty item body; the file path is already in the URL.
+    body: JSON.stringify({ item: {} }),
+  });
+
+  if (!sessionRes.ok) {
+    const body = await sessionRes.text().catch(() => "");
+    throw new Error(
+      `Create upload session failed: ${sessionRes.status} ${sessionRes.statusText} - ${body}`,
+    );
+  }
+
+  const session = (await sessionRes.json()) as { uploadUrl?: string };
+  if (!session.uploadUrl) {
+    throw new Error("Create upload session response missing uploadUrl");
+  }
+
+  // 2. Upload in chunks
+  let offset = 0;
+  while (offset < totalSize) {
+    const end = Math.min(offset + UPLOAD_CHUNK_SIZE, totalSize);
+    const chunk = buffer.subarray(offset, end);
+
+    const chunkRes = await fetchFn(session.uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Length": String(chunk.byteLength),
+        "Content-Range": `bytes ${offset}-${end - 1}/${totalSize}`,
+      },
+      body: chunk,
+    });
+
+    const chunkRes = await fetchFn(session.uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Length": String(chunk.byteLength),
+        "Content-Range": `bytes ${offset}-${end - 1}/${totalSize}`,
+      },
+      body: new Uint8Array(chunk),
+    });
+
+    if (!chunkRes.ok) {
+      const body = await chunkRes.text().catch(() => "");
+      throw new Error(
+        `Upload chunk ${offset}-${end - 1}/${totalSize} failed: ${chunkRes.status} ${chunkRes.statusText} - ${body}`,
+      );
+    }
+
+    // The final chunk (HTTP 200/201) returns the completed driveItem.
+    if (end === totalSize) {
+      const data = (await chunkRes.json()) as {
+        id?: string;
+        webUrl?: string;
+        name?: string;
+      };
+      if (!data.id || !data.webUrl || !data.name) {
+        throw new Error("Resumable upload final response missing required fields");
+      }
+      return { id: data.id, webUrl: data.webUrl, name: data.name };
+    }
+
+    offset = end;
+  }
+
+  // Should never reach here since the loop always returns on the final chunk,
+  // but TypeScript needs an explicit return.
+  throw new Error("Resumable upload ended without a completed response");
+}
+
 export interface OneDriveUploadResult {
   id: string;
   webUrl: string;
@@ -23,8 +122,7 @@ export interface OneDriveUploadResult {
 
 /**
  * Upload a file to the user's OneDrive root folder.
- * For larger files, this uses the simple upload endpoint (up to 4MB).
- * TODO: For files >4MB, implement resumable upload session.
+ * Uses simple PUT for files up to 4 MB, and a resumable upload session for larger files.
  */
 export async function uploadToOneDrive(params: {
   buffer: Buffer;
@@ -38,6 +136,16 @@ export async function uploadToOneDrive(params: {
 
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
+
+  // For large files, use a resumable upload session
+  if (params.buffer.byteLength > SIMPLE_UPLOAD_MAX_BYTES) {
+    return resumableUpload({
+      createSessionUrl: `${GRAPH_ROOT}/me/drive/root:${uploadPath}:/createUploadSession`,
+      buffer: params.buffer,
+      token,
+      fetchFn,
+    });
+  }
 
   const res = await fetchFn(`${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`, {
     method: "PUT",
@@ -165,6 +273,7 @@ export async function uploadAndShareOneDrive(params: {
 /**
  * Upload a file to a SharePoint site.
  * This is used for group chats and channels where /me/drive doesn't work for bots.
+ * Uses simple PUT for files up to 4 MB, and a resumable upload session for larger files.
  *
  * @param params.siteId - SharePoint site ID (e.g., "contoso.sharepoint.com,guid1,guid2")
  */
@@ -181,6 +290,16 @@ export async function uploadToSharePoint(params: {
 
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
+
+  // For large files, use a resumable upload session
+  if (params.buffer.byteLength > SIMPLE_UPLOAD_MAX_BYTES) {
+    return resumableUpload({
+      createSessionUrl: `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/createUploadSession`,
+      buffer: params.buffer,
+      token,
+      fetchFn,
+    });
+  }
 
   const res = await fetchFn(
     `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
