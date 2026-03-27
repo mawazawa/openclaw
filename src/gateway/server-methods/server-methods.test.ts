@@ -232,6 +232,7 @@ describe("gateway chat transcript writes (guardrail)", () => {
 
     expect(src).toContain("SessionManager.open(transcriptPath)");
     expect(src).toContain("appendMessage(");
+    expect(src).toContain("emitSessionTranscriptUpdate(transcriptPath)");
   });
 });
 

@@ -10,6 +10,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
@@ -414,6 +415,7 @@ function appendAssistantTranscriptMessage(params: {
     // Raw jsonl appends break the parent chain and can hide compaction summaries from context.
     const sessionManager = SessionManager.open(transcriptPath);
     const messageId = sessionManager.appendMessage(messageBody);
+    emitSessionTranscriptUpdate(transcriptPath);
     return { ok: true, messageId, message: messageBody };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
