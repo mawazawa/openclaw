@@ -15,7 +15,10 @@ let lastClientOptions: {
   tlsFingerprint?: string;
   scopes?: string[];
   deviceIdentity?: unknown;
-  onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
+  onHelloOk?: (hello: {
+    features?: { methods?: string[] };
+    snapshot?: { health?: unknown; presence?: unknown };
+  }) => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
 } | null = null;
 let lastRequestOptions: {
@@ -604,6 +607,40 @@ describe("callGateway error details", () => {
     expect(lastRequestOptions?.method).toBe("health");
     expect(lastRequestOptions?.opts?.expectFinal).toBe(true);
     expect(lastRequestOptions?.opts?.timeoutMs).toBeUndefined();
+  });
+
+  it("returns cached health from hello snapshot without issuing a request", async () => {
+    setLocalLoopbackGatewayConfig();
+    startMode = "silent";
+    const expected = { ok: true, ts: 123, durationMs: 4 };
+    lastRequestOptions = null;
+
+    const resultPromise = callGateway({ method: "health" });
+    await vi.waitFor(() => expect(lastClientOptions).not.toBeNull());
+    await lastClientOptions?.onHelloOk?.({
+      features: { methods: ["health"] },
+      snapshot: { health: expected },
+    });
+
+    await expect(resultPromise).resolves.toEqual(expected);
+    expect(lastRequestOptions).toBeNull();
+  });
+
+  it("returns cached presence from hello snapshot without issuing a request", async () => {
+    setLocalLoopbackGatewayConfig();
+    startMode = "silent";
+    const expected = [{ host: "localhost", mode: "gateway" }];
+    lastRequestOptions = null;
+
+    const resultPromise = callGateway({ method: "system-presence" });
+    await vi.waitFor(() => expect(lastClientOptions).not.toBeNull());
+    await lastClientOptions?.onHelloOk?.({
+      features: { methods: ["system-presence"] },
+      snapshot: { presence: expected },
+    });
+
+    await expect(resultPromise).resolves.toEqual(expected);
+    expect(lastRequestOptions).toBeNull();
   });
 
   it("fails fast when remote mode is missing remote url", async () => {

@@ -360,6 +360,24 @@ describe("device pairing tokens", () => {
     expect(mismatch.reason).toBe("token-mismatch");
   });
 
+  test("keeps token verification read-only for last-used metadata", async () => {
+    const { baseDir, token } = await setupOperatorToken(["operator.read"]);
+    const before = await getPairedDevice("device-1", baseDir);
+    expect(before?.tokens?.operator?.lastUsedAtMs).toBeUndefined();
+
+    await expect(
+      verifyOperatorToken({
+        baseDir,
+        token,
+        scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    const after = await getPairedDevice("device-1", baseDir);
+    expect(after?.tokens?.operator?.token).toBe(before?.tokens?.operator?.token);
+    expect(after?.tokens?.operator?.lastUsedAtMs).toBeUndefined();
+  });
+
   test("rejects persisted tokens whose scopes exceed the approved scope baseline", async () => {
     const { baseDir, token } = await setupOperatorToken(["operator.read"]);
     await overwritePairedOperatorTokenScopes(baseDir, ["operator.admin"]);

@@ -234,6 +234,20 @@ describe("gemini-embedding-001 provider (backward compat)", () => {
 // ---------- Provider: gemini-embedding-2-preview ----------
 
 describe("gemini-embedding-2-preview provider", () => {
+  it("prefers env-backed auth when resolving memory embedding credentials", async () => {
+    const fetchMock = createGeminiFetchMock();
+    await createProviderWithFetch(fetchMock, {
+      model: "gemini-embedding-2-preview",
+    });
+
+    expect(authModule.resolveApiKeyForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "google",
+        preferEnv: true,
+      }),
+    );
+  });
+
   it("includes outputDimensionality in embedQuery request", async () => {
     const fetchMock = createGeminiFetchMock();
     const provider = await createProviderWithFetch(fetchMock, {

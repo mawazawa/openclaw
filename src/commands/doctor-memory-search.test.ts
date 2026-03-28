@@ -187,6 +187,7 @@ describe("noteMemorySearchHealth", () => {
       provider: "google",
       cfg,
       agentDir: "/tmp/agent-default",
+      preferEnv: true,
     });
     expect(note).not.toHaveBeenCalled();
   });
@@ -209,6 +210,7 @@ describe("noteMemorySearchHealth", () => {
       provider: "mistral",
       cfg,
       agentDir: "/tmp/agent-default",
+      preferEnv: true,
     });
     expect(note).not.toHaveBeenCalled();
   });

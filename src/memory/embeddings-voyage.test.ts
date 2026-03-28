@@ -68,7 +68,7 @@ describe("voyage embedding provider", () => {
     await result.provider.embedQuery("test query");
 
     expect(authModule.resolveApiKeyForProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "voyage" }),
+      expect.objectContaining({ provider: "voyage", preferEnv: true }),
     );
 
     const call = fetchMock.mock.calls[0];

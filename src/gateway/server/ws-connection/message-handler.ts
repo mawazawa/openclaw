@@ -11,6 +11,7 @@ import {
   approveDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
+  recordDeviceTokenUse,
   requestDevicePairing,
   updatePairedDeviceMetadata,
   verifyDeviceToken,
@@ -446,6 +447,7 @@ export function attachGatewayWsMessageHandler(params: {
         const deviceRaw = connectParams.device;
         let devicePublicKey: string | null = null;
         let deviceAuthPayloadVersion: "v2" | "v3" | null = null;
+        const postHelloTasks: Array<() => Promise<void>> = [];
         const hasTokenAuth = Boolean(connectParams.auth?.token);
         const hasPasswordAuth = Boolean(connectParams.auth?.password);
         const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
@@ -890,13 +892,24 @@ export function attachGatewayWsMessageHandler(params: {
 
             // Metadata pinning is approval-bound. Reconnects can update access metadata,
             // but platform/device family must stay on the approved pairing record.
-            await updatePairedDeviceMetadata(device.id, clientAccessMetadata);
+            postHelloTasks.push(async () => {
+              await updatePairedDeviceMetadata(device.id, clientAccessMetadata);
+            });
           }
         }
 
         const deviceToken = device
           ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
           : null;
+        if (authMethod === "device-token" && device && deviceTokenCandidate) {
+          postHelloTasks.push(async () => {
+            await recordDeviceTokenUse({
+              deviceId: device.id,
+              token: deviceTokenCandidate,
+              role,
+            });
+          });
+        }
 
         if (role === "node") {
           const cfg = loadConfig();
@@ -1064,6 +1077,11 @@ export function attachGatewayWsMessageHandler(params: {
         });
 
         send({ type: "res", id: frame.id, ok: true, payload: helloOk });
+        for (const task of postHelloTasks) {
+          void task().catch((err) =>
+            logGateway.warn(`post-connect device bookkeeping failed: ${formatForLog(err)}`),
+          );
+        }
         void refreshGatewayHealthSnapshot({ probe: true }).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );

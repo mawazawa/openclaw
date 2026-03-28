@@ -628,46 +628,75 @@ export async function verifyDeviceToken(params: {
   scopes: string[];
   baseDir?: string;
 }): Promise<{ ok: boolean; reason?: string }> {
+  const state = await loadState(params.baseDir);
+  const device = getPairedDeviceFromState(state, params.deviceId);
+  if (!device) {
+    return { ok: false, reason: "device-not-paired" };
+  }
+  const role = normalizeRole(params.role);
+  if (!role) {
+    return { ok: false, reason: "role-missing" };
+  }
+  const entry = device.tokens?.[role];
+  if (!entry) {
+    return { ok: false, reason: "token-missing" };
+  }
+  if (entry.revokedAtMs) {
+    return { ok: false, reason: "token-revoked" };
+  }
+  if (!verifyPairingToken(params.token, entry.token)) {
+    return { ok: false, reason: "token-mismatch" };
+  }
+  const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
+  if (
+    !scopesWithinApprovedDeviceBaseline({
+      role,
+      scopes: entry.scopes,
+      approvedScopes,
+    })
+  ) {
+    return { ok: false, reason: "scope-mismatch" };
+  }
+  const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
+  if (!roleScopesAllow({ role, requestedScopes, allowedScopes: entry.scopes })) {
+    return { ok: false, reason: "scope-mismatch" };
+  }
+  return { ok: true };
+}
+
+export async function recordDeviceTokenUse(params: {
+  deviceId: string;
+  token: string;
+  role: string;
+  baseDir?: string;
+  usedAtMs?: number;
+}): Promise<void> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const device = getPairedDeviceFromState(state, params.deviceId);
     if (!device) {
-      return { ok: false, reason: "device-not-paired" };
+      return;
     }
     const role = normalizeRole(params.role);
     if (!role) {
-      return { ok: false, reason: "role-missing" };
+      return;
     }
     const entry = device.tokens?.[role];
-    if (!entry) {
-      return { ok: false, reason: "token-missing" };
-    }
-    if (entry.revokedAtMs) {
-      return { ok: false, reason: "token-revoked" };
+    if (!entry || entry.revokedAtMs) {
+      return;
     }
     if (!verifyPairingToken(params.token, entry.token)) {
-      return { ok: false, reason: "token-mismatch" };
+      return;
     }
-    const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
-    if (
-      !scopesWithinApprovedDeviceBaseline({
-        role,
-        scopes: entry.scopes,
-        approvedScopes,
-      })
-    ) {
-      return { ok: false, reason: "scope-mismatch" };
+    const usedAtMs = params.usedAtMs ?? Date.now();
+    if (typeof entry.lastUsedAtMs === "number" && entry.lastUsedAtMs >= usedAtMs) {
+      return;
     }
-    const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
-    if (!roleScopesAllow({ role, requestedScopes, allowedScopes: entry.scopes })) {
-      return { ok: false, reason: "scope-mismatch" };
-    }
-    entry.lastUsedAtMs = Date.now();
+    entry.lastUsedAtMs = usedAtMs;
     device.tokens ??= {};
     device.tokens[role] = entry;
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, params.baseDir);
-    return { ok: true };
   });
 }
 

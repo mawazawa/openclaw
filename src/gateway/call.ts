@@ -81,6 +81,19 @@ export type GatewayConnectionDetails = {
   message: string;
 };
 
+function resolveHelloSnapshotResult<T>(params: {
+  method: string;
+  hello: { snapshot?: { health?: unknown; presence?: unknown } };
+}): { hit: boolean; value?: T } {
+  if (params.method === "health" && params.hello.snapshot?.health !== undefined) {
+    return { hit: true, value: params.hello.snapshot.health as T };
+  }
+  if (params.method === "system-presence" && params.hello.snapshot?.presence !== undefined) {
+    return { hit: true, value: params.hello.snapshot.presence as T };
+  }
+  return { hit: false };
+}
+
 const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
 const defaultGatewayCallDeps = {
   createGatewayClient: defaultCreateGatewayClient,
@@ -880,6 +893,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
             methods: hello.features?.methods,
             attemptedMethod: opts.method,
           });
+          const snapshotResult = resolveHelloSnapshotResult<T>({
+            method: opts.method,
+            hello,
+          });
+          if (snapshotResult.hit) {
+            ignoreClose = true;
+            stop(undefined, snapshotResult.value);
+            client.stop();
+            return;
+          }
           const result = await client.request<T>(opts.method, opts.params, {
             expectFinal: opts.expectFinal,
             timeoutMs: opts.timeoutMs,

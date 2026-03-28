@@ -300,6 +300,7 @@ export async function resolveGeminiEmbeddingClient(
           provider: "google",
           cfg: options.config,
           agentDir: options.agentDir,
+          preferEnv: true,
         }),
         "google",
       );

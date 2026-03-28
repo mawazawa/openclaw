@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   requests: [] as string[],
+  hello: {} as Record<string, unknown>,
 }));
 
 class MockGatewayClient {
@@ -19,7 +20,7 @@ class MockGatewayClient {
       .then(async () => {
         const onHelloOk = this.opts.onHelloOk;
         if (typeof onHelloOk === "function") {
-          await onHelloOk();
+          await onHelloOk(gatewayClientState.hello);
         }
       })
       .catch(() => {});
@@ -43,6 +44,18 @@ vi.mock("./client.js", () => ({
 const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
 
 describe("probeGateway", () => {
+  it("keeps device identity enabled when loopback auth object is present but empty", async () => {
+    gatewayClientState.hello = {};
+
+    await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: {},
+      timeoutMs: 1_000,
+    });
+
+    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
+  });
+
   it("clamps probe timeout to timer-safe bounds", () => {
     expect(clampProbeTimeoutMs(1)).toBe(250);
     expect(clampProbeTimeoutMs(2_000)).toBe(2_000);
@@ -50,6 +63,7 @@ describe("probeGateway", () => {
   });
 
   it("connects with operator.read scope", async () => {
+    gatewayClientState.hello = {};
     const result = await probeGateway({
       url: "ws://127.0.0.1:18789",
       auth: { token: "secret" },
@@ -68,6 +82,7 @@ describe("probeGateway", () => {
   });
 
   it("keeps device identity enabled for remote probes", async () => {
+    gatewayClientState.hello = {};
     await probeGateway({
       url: "wss://gateway.example/ws",
       auth: { token: "secret" },
@@ -78,6 +93,7 @@ describe("probeGateway", () => {
   });
 
   it("keeps device identity disabled for unauthenticated loopback probes", async () => {
+    gatewayClientState.hello = {};
     await probeGateway({
       url: "ws://127.0.0.1:18789",
       timeoutMs: 1_000,
@@ -87,6 +103,7 @@ describe("probeGateway", () => {
   });
 
   it("skips detail RPCs for lightweight reachability probes", async () => {
+    gatewayClientState.hello = {};
     const result = await probeGateway({
       url: "ws://127.0.0.1:18789",
       timeoutMs: 1_000,
@@ -98,6 +115,7 @@ describe("probeGateway", () => {
   });
 
   it("fetches only presence for presence-only probes", async () => {
+    gatewayClientState.hello = {};
     const result = await probeGateway({
       url: "ws://127.0.0.1:18789",
       timeoutMs: 1_000,
@@ -109,5 +127,41 @@ describe("probeGateway", () => {
     expect(result.health).toBeNull();
     expect(result.status).toBeNull();
     expect(result.configSnapshot).toBeNull();
+  });
+
+  it("uses hello snapshot presence without an extra presence request", async () => {
+    const expected = [{ host: "localhost", mode: "gateway" }];
+    gatewayClientState.hello = { snapshot: { presence: expected } };
+
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+      detailLevel: "presence",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.presence).toEqual(expected);
+    expect(gatewayClientState.requests).toEqual([]);
+  });
+
+  it("uses hello snapshot health and presence before follow-up detail RPCs", async () => {
+    const expectedHealth = { ok: true, ts: 123 };
+    const expectedPresence = [{ host: "localhost", mode: "gateway" }];
+    gatewayClientState.hello = {
+      snapshot: {
+        health: expectedHealth,
+        presence: expectedPresence,
+      },
+    };
+
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.health).toEqual(expectedHealth);
+    expect(result.presence).toEqual(expectedPresence);
+    expect(gatewayClientState.requests).toEqual(["status", "config.get"]);
   });
 });

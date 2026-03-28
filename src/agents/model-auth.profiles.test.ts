@@ -401,6 +401,61 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("prefers env-backed Gemini auth over stored profiles when requested", async () => {
+    await withEnvAsync(
+      {
+        GEMINI_API_KEY: "gemini-env-key", // pragma: allowlist secret
+        GOOGLE_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "google",
+          preferEnv: true,
+          store: {
+            version: 1,
+            profiles: {
+              "google:default": {
+                type: "api_key",
+                provider: "google",
+                key: "google-profile-key", // pragma: allowlist secret
+              },
+            },
+          },
+        });
+        expect(resolved.apiKey).toBe("gemini-env-key");
+        expect(resolved.source).toContain("GEMINI_API_KEY");
+        expect(resolved.profileId).toBeUndefined();
+      },
+    );
+  });
+
+  it("keeps profile-first auth behavior by default", async () => {
+    await withEnvAsync(
+      {
+        GEMINI_API_KEY: "gemini-env-key", // pragma: allowlist secret
+        GOOGLE_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "google",
+          store: {
+            version: 1,
+            profiles: {
+              "google:default": {
+                type: "api_key",
+                provider: "google",
+                key: "google-profile-key", // pragma: allowlist secret
+              },
+            },
+          },
+        });
+        expect(resolved.apiKey).toBe("google-profile-key");
+        expect(resolved.source).toBe("profile:google:default");
+        expect(resolved.profileId).toBe("google:default");
+      },
+    );
+  });
+
   it("strips embedded CR/LF from ANTHROPIC_API_KEY", async () => {
     await withEnvAsync({ [envVar("ANTHROPIC", "API", "KEY")]: "sk-ant-test-\r\nkey" }, async () => {
       // pragma: allowlist secret

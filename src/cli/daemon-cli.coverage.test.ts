@@ -151,7 +151,9 @@ describe("daemon-cli coverage", () => {
     await runDaemonCommand(["daemon", "status"]);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "status" }));
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "health", params: { probe: false } }),
+    );
     expect(findExtraGatewayServices).toHaveBeenCalled();
     expect(inspectPortUsage).toHaveBeenCalled();
   });
@@ -177,7 +179,8 @@ describe("daemon-cli coverage", () => {
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "ws://127.0.0.1:19001",
-        method: "status",
+        method: "health",
+        params: { probe: false },
       }),
     );
     expect(inspectPortUsage).toHaveBeenCalledWith(19001);

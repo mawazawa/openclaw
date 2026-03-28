@@ -52,9 +52,9 @@ export async function probeGateway(opts: {
   const disableDeviceIdentity = (() => {
     try {
       const hostname = new URL(opts.url).hostname;
-      // Local authenticated probes should stay device-bound so read/detail RPCs
-      // are not scope-limited by the shared-auth scope stripping hardening.
-      return isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password);
+      // Only literal anonymous loopback probes should strip device identity.
+      // Empty auth objects can still mean "resolved auth path present but unavailable".
+      return isLoopbackHost(hostname) && opts.auth === undefined;
     } catch {
       return false;
     }
@@ -101,7 +101,7 @@ export async function probeGateway(opts: {
       onClose: (code, reason) => {
         close = { code, reason };
       },
-      onHelloOk: async () => {
+      onHelloOk: async (hello) => {
         connectLatencyMs = Date.now() - startedAt;
         if (detailLevel === "none") {
           settle({
@@ -131,8 +131,12 @@ export async function probeGateway(opts: {
           });
         });
         try {
+          const snapshotHealth = hello.snapshot?.health ?? null;
+          const snapshotPresence = Array.isArray(hello.snapshot?.presence)
+            ? (hello.snapshot.presence as SystemPresence[])
+            : null;
           if (detailLevel === "presence") {
-            const presence = await client.request("system-presence");
+            const presence = snapshotPresence ?? (await client.request("system-presence"));
             settle({
               ok: true,
               connectLatencyMs,
@@ -140,15 +144,17 @@ export async function probeGateway(opts: {
               close,
               health: null,
               status: null,
-              presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
+              presence: Array.isArray(presence) ? presence : null,
               configSnapshot: null,
             });
             return;
           }
           const [health, status, presence, configSnapshot] = await Promise.all([
-            client.request("health"),
+            snapshotHealth !== null ? Promise.resolve(snapshotHealth) : client.request("health"),
             client.request("status"),
-            client.request("system-presence"),
+            snapshotPresence !== null
+              ? Promise.resolve(snapshotPresence)
+              : client.request("system-presence"),
             client.request("config.get", {}),
           ]);
           settle({
@@ -158,7 +164,7 @@ export async function probeGateway(opts: {
             close,
             health,
             status,
-            presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
+            presence: Array.isArray(presence) ? presence : null,
             configSnapshot,
           });
         } catch (err) {

@@ -277,10 +277,11 @@ export async function resolveApiKeyForProvider(params: {
   cfg?: OpenClawConfig;
   profileId?: string;
   preferredProfile?: string;
+  preferEnv?: boolean;
   store?: AuthProfileStore;
   agentDir?: string;
 }): Promise<ResolvedProviderAuth> {
-  const { provider, cfg, profileId, preferredProfile } = params;
+  const { provider, cfg, profileId, preferredProfile, preferEnv = false } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
 
   if (profileId) {
@@ -305,6 +306,15 @@ export async function resolveApiKeyForProvider(params: {
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return resolveAwsSdkAuthInfo();
+  }
+
+  const envResolved = resolveEnvApiKey(provider);
+  if (preferEnv && envResolved) {
+    return {
+      apiKey: envResolved.apiKey,
+      source: envResolved.source,
+      mode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+    };
   }
 
   const order = resolveAuthProfileOrder({
@@ -335,7 +345,6 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const envResolved = resolveEnvApiKey(provider);
   if (envResolved) {
     return {
       apiKey: envResolved.apiKey,
