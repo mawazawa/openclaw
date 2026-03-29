@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
@@ -43,6 +44,33 @@ function listenerOwnedByRuntimePid(params: {
   runtimePid: number;
 }): boolean {
   return params.listener.pid === params.runtimePid || params.listener.ppid === params.runtimePid;
+}
+
+function listenerOwnedByDetachedGatewayPid(params: {
+  listener: PortUsage["listeners"][number];
+  detachedGatewayPid: number;
+}): boolean {
+  return params.listener.pid === params.detachedGatewayPid;
+}
+
+async function readDetachedGatewayPid(env: NodeJS.ProcessEnv): Promise<number | undefined> {
+  const pidFile = env.OPENCLAW_GATEWAY_CHILD_PID_FILE?.trim();
+  if (!pidFile) {
+    return undefined;
+  }
+
+  try {
+    const raw = await readFile(pidFile, "utf8");
+    const match = raw.trim().match(/^(\d+)$/);
+    if (!match) {
+      return undefined;
+    }
+
+    const pid = Number.parseInt(match[1], 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function looksLikeAuthClose(code: number | undefined, reason: string | undefined): boolean {
@@ -124,6 +152,7 @@ export async function inspectGatewayRestart(params: {
     };
   }
 
+  const detachedGatewayPid = await readDetachedGatewayPid(env);
   if (portUsage.status === "busy" && runtime.status !== "running") {
     try {
       const reachable = await confirmGatewayReachable(params.port);
@@ -153,19 +182,32 @@ export async function inspectGatewayRestart(params: {
     portUsage.status === "busy"
       ? portUsage.listeners
           .filter((listener) => classifyPortListener(listener, params.port) === "unknown")
+          .filter(
+            (listener) =>
+              detachedGatewayPid == null ||
+              !listenerOwnedByDetachedGatewayPid({ listener, detachedGatewayPid }),
+          )
           .map((listener) => listener.pid)
           .filter((pid): pid is number => Number.isFinite(pid))
       : [];
   const running = runtime.status === "running";
   const runtimePid = runtime.pid;
   const listenerAttributionGap = hasListenerAttributionGap(portUsage);
+  const detachedGatewayOwnsPort =
+    detachedGatewayPid != null &&
+    portUsage.status === "busy" &&
+    portUsage.listeners.some((listener) =>
+      listenerOwnedByDetachedGatewayPid({ listener, detachedGatewayPid }),
+    );
   const ownsPort =
     runtimePid != null
       ? portUsage.listeners.some((listener) =>
           listenerOwnedByRuntimePid({ listener, runtimePid }),
-        ) || listenerAttributionGap
-      : gatewayListeners.length > 0 || listenerAttributionGap;
-  let healthy = running && ownsPort;
+        ) ||
+        listenerAttributionGap ||
+        detachedGatewayOwnsPort
+      : gatewayListeners.length > 0 || listenerAttributionGap || detachedGatewayOwnsPort;
+  let healthy = (running && ownsPort) || detachedGatewayOwnsPort;
   if (!healthy && running && portUsage.status === "busy") {
     try {
       healthy = await confirmGatewayReachable(params.port);
@@ -178,6 +220,12 @@ export async function inspectGatewayRestart(params: {
       ...gatewayListeners
         .filter((listener) => Number.isFinite(listener.pid))
         .filter((listener) => {
+          if (
+            detachedGatewayPid != null &&
+            listenerOwnedByDetachedGatewayPid({ listener, detachedGatewayPid })
+          ) {
+            return false;
+          }
           if (!running) {
             return true;
           }

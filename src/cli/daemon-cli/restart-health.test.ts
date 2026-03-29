@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
 import type { PortListenerKind, PortUsage } from "../../infra/ports.js";
@@ -7,6 +10,7 @@ const classifyPortListener = vi.hoisted(() =>
   vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(() => "gateway"),
 );
 const probeGateway = vi.hoisted(() => vi.fn());
+let tempDirs: string[] = [];
 
 vi.mock("../../infra/ports.js", () => ({
   classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
@@ -31,6 +35,7 @@ function makeGatewayService(
 async function inspectGatewayRestartWithSnapshot(params: {
   runtime: { status: "running"; pid: number } | { status: "stopped" };
   portUsage: PortUsage;
+  env?: NodeJS.ProcessEnv;
   includeUnknownListenersAsStale?: boolean;
 }) {
   const service = makeGatewayService(params.runtime);
@@ -39,6 +44,7 @@ async function inspectGatewayRestartWithSnapshot(params: {
   return inspectGatewayRestart({
     service,
     port: 18789,
+    env: params.env ?? {},
     ...(params.includeUnknownListenersAsStale === undefined
       ? {}
       : { includeUnknownListenersAsStale: params.includeUnknownListenersAsStale }),
@@ -79,6 +85,14 @@ async function inspectAmbiguousOwnershipWithProbe(
   });
 }
 
+async function writeDetachedGatewayPidFile(pid: number): Promise<string> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-pid-"));
+  tempDirs.push(dir);
+  const pidFile = path.join(dir, "gateway.pid");
+  await writeFile(pidFile, `${pid}\n`, "utf8");
+  return pidFile;
+}
+
 describe("inspectGatewayRestart", () => {
   beforeEach(() => {
     inspectPortUsage.mockReset();
@@ -95,10 +109,13 @@ describe("inspectGatewayRestart", () => {
       ok: false,
       close: null,
     });
+    tempDirs = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs = [];
   });
 
   it("treats a gateway listener child pid as healthy ownership", async () => {
@@ -129,6 +146,26 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(false);
     expect(snapshot.staleGatewayPids).toEqual([9000]);
+  });
+
+  it("treats a detached child gateway pid file as healthy ownership", async () => {
+    const pidFile = await writeDetachedGatewayPidFile(9100);
+
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "stopped" },
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 9100, commandLine: "openclaw-gateway" }],
+        hints: [],
+      },
+      env: {
+        OPENCLAW_GATEWAY_CHILD_PID_FILE: pidFile,
+      },
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.staleGatewayPids).toEqual([]);
   });
 
   it("treats unknown listeners as stale on Windows when enabled", async () => {
